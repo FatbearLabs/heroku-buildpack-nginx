@@ -8,13 +8,15 @@ NGINX_VERSION=${NGINX_VERSION-1.18.0}
 PCRE_VERSION=${PCRE_VERSION-8.44}
 HEADERS_MORE_VERSION=${HEADERS_MORE_VERSION-0.33}
 ZLIB_VERSION=${ZLIB_VERSION-1.2.11}
-UUID4_VERSION=${UUID4_VERSION-master}
+UUID4_VERSION=${UUID4_VERSION-f8f7ff44e6a8c6cf75232ae4b63d011f2f3b34c1}
+BROTLI_VERSION=${BROTLI_VERSION-9aec15e2aa6feea2113119ba06460af70ab3ea62}
 
 nginx_tarball_url=https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz
 pcre_tarball_url=https://ftp.pcre.org/pub/pcre/pcre-${PCRE_VERSION}.tar.gz
 headers_more_nginx_module_url=https://github.com/openresty/headers-more-nginx-module/archive/v${HEADERS_MORE_VERSION}.tar.gz
 uuid4_url=https://github.com/cybozu/nginx-uuid4-module/archive/${UUID4_VERSION}.tar.gz
 zlib_url=http://zlib.net/zlib-${ZLIB_VERSION}.tar.gz
+brotli_url=https://github.com/google/ngx_brotli.git
 
 temp_dir=$(mktemp -d /tmp/nginx.XXXXXXXXXX)
 
@@ -36,6 +38,30 @@ echo "Downloading $zlib_url"
 echo "Downloading $uuid4_url"
 (cd nginx-${NGINX_VERSION} && curl -L $uuid4_url | tar xvz )
 
+echo "Downloading $brotli_url"
+(
+  cd nginx-${NGINX_VERSION}
+  mkdir ngx_brotli-${BROTLI_VERSION}
+  cd ngx_brotli-${BROTLI_VERSION}
+  git init
+  git remote add origin $brotli_url
+  git fetch --depth 1 origin ${BROTLI_VERSION}
+  git checkout ${BROTLI_VERSION}
+  git submodule update --depth 1 --init
+)
+
+echo "Applying nginx patches"
+if [ -d "/buildpack/scripts/patchfiles/${NGINX_VERSION}" ]; then
+  PATCHFILES=$(find /buildpack/scripts/patchfiles/${NGINX_VERSION} -name '*.patch')
+  (
+    cd nginx-${NGINX_VERSION}
+    for f in $PATCHFILES; do
+      echo "patch: $f"
+      patch -p0 < "$f"
+    done
+  )
+fi
+
 # This will build `nginx`
 (
   cd nginx-${NGINX_VERSION}
@@ -45,9 +71,12 @@ echo "Downloading $uuid4_url"
     --with-http_gzip_static_module \
     --with-http_realip_module \
     --with-http_ssl_module \
+    --with-http_v2_module \
+    --with-http_stub_status_module \
     --prefix=/tmp/nginx \
     --add-module=${temp_dir}/nginx-${NGINX_VERSION}/headers-more-nginx-module-${HEADERS_MORE_VERSION} \
-    --add-module=${temp_dir}/nginx-${NGINX_VERSION}/nginx-uuid4-module-${UUID4_VERSION}
+    --add-module=${temp_dir}/nginx-${NGINX_VERSION}/nginx-uuid4-module-${UUID4_VERSION} \
+    --add-module=${temp_dir}/nginx-${NGINX_VERSION}/ngx_brotli-${BROTLI_VERSION}
   make install
 )
 
@@ -61,9 +90,12 @@ echo "Downloading $uuid4_url"
     --with-http_gzip_static_module \
     --with-http_realip_module \
     --with-http_ssl_module \
+    --with-http_v2_module \
+    --with-http_stub_status_module \
     --prefix=/tmp/nginx-debug \
     --add-module=${temp_dir}/nginx-${NGINX_VERSION}/headers-more-nginx-module-${HEADERS_MORE_VERSION} \
-    --add-module=${temp_dir}/nginx-${NGINX_VERSION}/nginx-uuid4-module-${UUID4_VERSION}
+    --add-module=${temp_dir}/nginx-${NGINX_VERSION}/nginx-uuid4-module-${UUID4_VERSION} \
+    --add-module=${temp_dir}/nginx-${NGINX_VERSION}/ngx_brotli-${BROTLI_VERSION}
   make install
 )
 
