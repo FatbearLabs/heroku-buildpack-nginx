@@ -1,0 +1,30 @@
+# Nginx default signals are:
+#   TERM   fast shutdown  (configured via NGX_TERMINATE_SIGNAL)
+#   INT    fast shutdown  (hardcoded SIGINT in ngx_process.c)
+#   QUIT   graceful shutdown (configured via NGX_SHUTDOWN_SIGNAL)
+#
+# (From http://nginx.org/en/docs/control.html)
+#
+#
+# We're changing it to:
+#   TERM   no-op - So start-nginx can convert Heroku's SIGTERM to a SIGQUIT at the appropriate time
+#   PWR    fast shutdown - because have to configure NGX_TERMINATE_SIGNAL to something, and PWR
+#          shouldn't ever fire (this took some time to find an unused signal that would compile
+#          and has default termination behavior. see signal(7))
+#   QUIT   graceful shutdown
+#
+# Based on https://github.com/heroku/heroku-buildpack-nginx/pull/56 but with SIGTERM no-op'ed
+#
+--- src/core/ngx_config.h	2020-05-23 04:21:07.000000000 +0000
++++ src/core/ngx_config.h	2020-05-23 04:15:17.000000000 +0000
+@@ -56,9 +56,8 @@
+
+ #define ngx_random               random
+
+-/* TODO: #ifndef */
+-#define NGX_SHUTDOWN_SIGNAL      QUIT
+-#define NGX_TERMINATE_SIGNAL     TERM
++#define NGX_SHUTDOWN_SIGNAL      QUIT
++#define NGX_TERMINATE_SIGNAL     PWR
+ #define NGX_NOACCEPT_SIGNAL      WINCH
+ #define NGX_RECONFIGURE_SIGNAL   HUP

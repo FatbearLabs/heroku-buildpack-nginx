@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+at() {
+  echo "buildpack=nginx dyno.id=${HEROKU_DYNO_ID} at=$*"
+}
+
 psmgr=/tmp/nginx-buildpack-wait
 rm -f $psmgr
 mkfifo $psmgr
@@ -19,22 +23,37 @@ done
 # Initialize log directory.
 mkdir -p logs/nginx
 touch logs/nginx/access.log logs/nginx/error.log
-echo 'buildpack=nginx at=logs-initialized'
+at "logs-initialized"
 
 # Start log redirection.
 (
+  trap '' SIGTERM   # Make sure this sub-shell doesn't get killed by Heroku's SIGTERM.
+
   # Redirect nginx logs to stdout.
   tail -qF -n 0 logs/nginx/*.log
+
+  at "logs-restarting"
+
+  # This is weird, but because we can't control `tail` ignoring SIGTERM, we assume we only got
+  # to this line because it exited due to a SIGTERM above. So start another one to tail any nginx
+  # logs while the graceful shutdown is still happening.
+  tail -qF -n 0 logs/nginx/*.log
+
+  at "logs-stop"
   echo 'logs' >$psmgr
 ) &
 
 # Start App Server
 (
+  trap '' SIGTERM   # Make sure this sub-shell doesn't get killed by Heroku's SIGTERM.
+
   # Take the command passed to this bin and start it.
   # E.g. bin/start-nginx bundle exec unicorn -c config/unicorn.rb
   COMMAND=${@:$n}
-  echo "buildpack=nginx at=start-app cmd=$COMMAND"
+  at "start-app cmd=$COMMAND"
   $COMMAND
+
+  at "stop-app cmd=$COMMAND"
   echo 'app' >$psmgr
 ) &
 
@@ -46,20 +65,32 @@ then
   # are app is ready for traffic.
   while [[ ! -f "$FILE" ]]
   do
-    echo 'buildpack=nginx at=app-initialization'
+    at "app-initialization"
     sleep 1
   done
-  echo 'buildpack=nginx at=app-initialized'
+  at "app-initialized"
 fi
 
 # Start nginx
 (
-  # We expect nginx to run in foreground.
-  # We also expect a socket to be at /tmp/nginx.socket.
-  echo 'buildpack=nginx at=nginx-start'
-  bin/nginx -p . -c config/nginx.conf
+  at "nginx-start"
+
+  trap '' SIGTERM   # Make sure this sub-shell doesn't get killed by Heroku's SIGTERM.
+
+  bin/nginx -p . -c config/nginx.conf &
+
+  # We patched nginx to ignore SIGTERM. So instead we take SIGHUP sent to this sub-shell and pass
+  # it to nginx as SIGQUIT which will invoke graceful shutdown.
+  trap "kill -SIGQUIT $!" SIGHUP
+
+  wait  # For for nginx to finish
+
+  at "nginx-stop"
   echo 'nginx' >$psmgr
 ) &
+nginx_job_pid=$!
+
+trap '' SIGTERM   # Make sure this top-level shell doesn't get killed by Heroku's SIGTERM.
 
 # This read will block the process waiting on a msg to be put into the fifo.
 # If any of the processes defined above should exit,
@@ -68,5 +99,16 @@ fi
 # will use it's process name as a msg so that we can print the offending
 # process to stdout.
 read exit_process <$psmgr
-echo "buildpack=nginx at=exit process=$exit_process"
+at "exit process=$exit_process"
+
+# Remove the FIFO. This allows any following writes from sub-shells to simply create a file,
+# rather than blocking because there's nothing reading the other end.
+rm -f "$psmgr"
+
+# Gracefully shutdown nginx now
+at "nginx-graceful-shutdown-start"
+kill -SIGHUP $nginx_job_pid
+wait $nginx_job_pid
+at "nginx-graceful-shutdown-stop"
+
 exit 1
